@@ -2,103 +2,151 @@ package main
 
 import (
 	"flag"
+	// "fmt"
+	// "log"
 	"fmt"
-	"github.com/dpapathanasiou/go-modbus"
-	"log"
+	"time"
+
+	"github.com/simonvetter/modbus"
 )
 
 func main() {
 
+	var cycle uint16 = 0
+
+	var singleRegAddr uint16 = 4
+	var singleRegValue uint16 = 0
+
+	var twoRegAddr1 uint16 = 0
+	var twoRegAddr2 uint16 = 2
+	var twoRegValue uint32 = 0
+
 	// get the device serial port from the command line
 	var (
-		serialPort    string
+		// Serial (Hardware)
+		serialPort string
+		baudRate   uint
+		// Serial (Protocol)
+		//     dataBits int
+		parity   uint
+		stopBits uint
+		// Modbus (Device)
 		slaveDevice   int
 		startAddr     int
-		numBytes      int
-		baudRate      int
 		responsePause int
 	)
 
 	const (
-		defaultPort          = ""
+		// Serial (Hardware)
+		defaultPort     = ""
+		defaultBaudRate = 9600
+
+		// Serial (Protocol)
+		defaultDataBits = 8
+		defaultParity   = modbus.PARITY_NONE
+		defaultStopBits = 1
+
+		// Modbus (Device)
 		defaultSlave         = 1
-		defaultStartAddress  = 3030
-		defaultNumBytes      = 16
-		defaultBaudRate      = 9600
-		defaultResponsePause = 300
+		defaultStartAddress  = 0
+		defaultResponsePause = 5
 	)
 
+	// Serial (Hardware)
 	flag.StringVar(&serialPort, "serial", defaultPort, "Serial port (RS485) to use, e.g., /dev/ttyS0 (try \"dmesg | grep tty\" to find)")
+	flag.UintVar(&baudRate, "baud", defaultBaudRate, fmt.Sprintf("Baud Rate (default is %d)", defaultBaudRate))
+
+	// Serial (Protocol)
+	// flag.IntVar(&dataBits, "dataBits", defaultDataBits, fmt.Sprintf("Data bits (default is %d)", defaultDataBits))
+	flag.UintVar(&parity, "parity", defaultParity, fmt.Sprintf("Set the parity value \"PARITY NONE\"=%d, \"PARITY EVEN\"=%d or \"PARITY_ODD\"=%d. (default is %d)", modbus.PARITY_NONE, modbus.PARITY_EVEN, modbus.PARITY_ODD, defaultParity))
+	flag.UintVar(&stopBits, "stopBits", defaultStopBits, fmt.Sprintf("Set the stop bits value 1 or 2. (default is %d)", defaultParity))
+
+	// Modbus (Device)
 	flag.IntVar(&slaveDevice, "slave", defaultSlave, fmt.Sprintf("Slave device number (default is %d)", defaultSlave))
 	flag.IntVar(&startAddr, "start", defaultStartAddress, fmt.Sprintf("Start address (default is %d)", defaultStartAddress))
-	flag.IntVar(&numBytes, "bytes", defaultNumBytes, fmt.Sprintf("Number of bytes to read from the start address (default is %d)", defaultNumBytes))
-	flag.IntVar(&baudRate, "baud", defaultBaudRate, fmt.Sprintf("Baud Rate (default is %d)", defaultBaudRate))
-	flag.IntVar(&responsePause, "pause", defaultResponsePause, fmt.Sprintf("Device Response Pause in milliseconds (default is %d)", defaultResponsePause))
+	flag.IntVar(&responsePause, "pause", defaultResponsePause, fmt.Sprintf("Pause between write cycle in milliseconds (default is %d)", defaultResponsePause))
+
+	// End of the Args setup
 	flag.Parse()
 
-	if len(serialPort) > 0 {
-
-		// turn on the debug trace option, to see what is being transmitted
-		trace := true
-		ctx, cerr := modbusclient.ConnectRTU(serialPort, baudRate)
-		if cerr != nil {
-			log.Println(fmt.Sprintf("RTU Connection Err: %s", cerr))
-		} else {
-			// attempt to read the [startAddr] address register on
-			// slave device number [slaveDevice] via the [serialDevice]
-			readResult, readErr := modbusclient.RTURead(ctx, byte(slaveDevice), modbusclient.FUNCTION_READ_HOLDING_REGISTERS, uint16(startAddr), uint16(numBytes), responsePause, trace)
-			writeResult, writeErr := modbusclient.RTUWrite(ctx, byte(slaveDevice), modbusclient.FUNCTION_READ_HOLDING_REGISTERS, startRegister, numRegisters uint16, data []byte, timeOut int, debug bool
-			if readErr != nil {
-				log.Println(readErr)
-			} else {
-				log.Println(fmt.Sprintf("Rx: %x", readResult))
-
-				// Skip past the reply headers, and decode each of the data hi/lo byte pairs into integers
-				var (
-					sliceStart, sliceStop int
-					data                  int16
-					decodeErr             error
-				)
-
-				for i := 0; i < int(readResult[2]); i++ {
-					// take the next two bytes, if available
-					sliceStart = 3 + i
-					sliceStop = 3 + i + 2
-
-					// decode them into integers
-					data, decodeErr = modbusclient.DecodeHiLo(readResult[sliceStart:sliceStop])
-					if decodeErr != nil {
-						log.Println(decodeErr)
-					} else {
-						log.Println(fmt.Sprintf("Decoded int = %d (from pair of data bytes: %x)", data, readResult[sliceStart:sliceStop]))
-					}
-				}
-			}
-			modbusclient.DisconnectRTU(ctx)
-		}
-		/*
-			// attempt to read the [startAddr] address register on
-			// slave device number [slaveDevice] via the [serialDevice]
-			readResult, readErr := modbusclient.RTURead(serialPort, byte(slaveDevice), modbusclient.FUNCTION_READ_HOLDING_REGISTERS, uint16(startAddr), uint16(numBytes), baudRate, responsePause, trace)
-			if readErr != nil {
-				log.Println(readErr)
-			}
-			log.Println(fmt.Sprintf("Rx: %x", readResult))
-
-			// Skip past the reply headers, and take a slice of the first data pair returned,
-			// to decode their high/low bytes into the corresponding integer value
-			firstInt, decodeErr := modbusclient.DecodeHiLo(readResult[3:5])
-			if decodeErr != nil {
-				log.Println(decodeErr)
-			} else {
-				log.Println(fmt.Sprintf("Decoded int = %d (from 1st pair of data bytes: %x)", firstInt, readResult[3:5]))
-			}*/
-
-	} else {
-
-		// display the command line usage requirements
+	if len(serialPort) == 0 { // If the serial port isn't set
+		// Show the commands and close the program and close the program
 		flag.PrintDefaults()
+		return
+	}
+
+	var client *modbus.ModbusClient
+	var err error
+
+	// for an RTU (serial) device/bus
+	client, err = modbus.NewClient(&modbus.ClientConfiguration{
+		URL:      "rtu://" + serialPort, // need a value
+		Speed:    baudRate,              // default
+		DataBits: defaultDataBits,       // default, optional
+		Parity:   parity,                // default, optional
+		StopBits: stopBits,              // default if no parity, optional
+		Timeout:  time.Millisecond * 300,
+	})
+	if err != nil {
+		// error out if client creation failed
+	}
+
+	// now that the client is created and configured, attempt to connect
+	err = client.Open()
+	if err != nil {
+		// error out if we failed to connect/open the device
+		// note: multiple Open() attempts can be made on the same client until
+		// the connection succeeds (i.e. err == nil), calling the constructor again
+		// is unnecessary.
+		// likewise, a client can be opened and closed as many times as needed.
+	}
+
+	// Switch to unit ID (a.k.a. slave ID) #1
+	client.SetUnitId(1)
+
+	// Writing Cycle
+	for true {
+		// write -200 to 16-bit (holding) register 100, as a signed integer
+		err = client.WriteRegister(singleRegAddr, singleRegValue)
+		if err != nil {
+			fmt.Printf("failed to read register 0x4000: %v\n", err)
+		} else {
+			fmt.Printf("register 0x4000: 0x%04x\n", singleRegValue)
+		}
+
+		// write a int32 value between 2 registers
+		err = client.WriteUint32(twoRegAddr1, twoRegValue)
+		if err != nil {
+			fmt.Printf("failed to read registers 0x4000 and 0x4001: %v\n", err)
+		} else {
+			fmt.Printf("register 0x4000 and 0x4001: 0x%08x\n", twoRegValue)
+		}
+
+		// write a int32 value between 2 registers
+		err = client.WriteUint32(twoRegAddr2, twoRegValue)
+		if err != nil {
+			fmt.Printf("failed to read registers 0x4000 and 0x4001: %v\n", err)
+		} else {
+			fmt.Printf("register 0x4002 and 0x4003: 0x%08x\n", twoRegValue)
+		}
+
+		time.Sleep(time.Duration(responsePause) * time.Second)
+
+		cycle++
+
+		if cycle > 60 { // whait for a moment and increment the registers
+			cycle = 0
+			singleRegValue++
+			twoRegValue++
+
+			if singleRegValue > 1000 || twoRegValue > 1000 {
+				singleRegValue = 0
+				twoRegValue = 0
+			}
+		}
 
 	}
 
+	// close the TCP connection/serial port
+	client.Close()
 }
